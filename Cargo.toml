@@ -12,3 +12,4 @@ serde = "1.0.114"
 serde_yaml = "0.8.13"
 reqwest = { version = "0.10", features = ["json"] }
 tokio = { version = "0.2", features = ["full"] }
+ctrlc = "3.1.6"

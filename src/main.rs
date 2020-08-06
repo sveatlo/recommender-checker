@@ -1,12 +1,15 @@
 extern crate clap;
+extern crate ctrlc;
 
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::fs::File;
-use std::io::{self, prelude::*, BufReader};
+use std::io::{prelude::*, BufReader};
+use std::sync::Arc;
 
 use clap::{App, Arg, SubCommand};
+use tokio::sync::oneshot;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -49,7 +52,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let dataset_file_path = sub_m.value_of("dataset-file").unwrap();
             let f = File::open(dataset_file_path)?;
 
-            validate(address, f).await
+            let (tx, rx) = oneshot::channel();
+
+            validate(address, f, rx).await
         }
         _ => Err(Box::from(SimpleError::new("invalid command"))),
     }
@@ -96,7 +101,7 @@ fn prepare_dataset(in_file: &File, out: &mut File) -> Result<(), Box<dyn Error>>
 
         let mut ss: Vec<String> = shows.iter().map(|&x| format!("{}", x)).collect();
         ss.dedup();
-        write!(out, "{}: {}\n", user, ss.join(","))?;
+        writeln!(out, "{}: {}", user, ss.join(","))?;
     }
 
     // serde_yaml::to_writer(out, &dataset)?;
@@ -104,14 +109,31 @@ fn prepare_dataset(in_file: &File, out: &mut File) -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
-async fn validate(address: &str, f: File) -> Result<(), Box<dyn Error>> {
+async fn validate(
+    address: &str,
+    f: File,
+    rx: oneshot::Receiver<bool>,
+) -> Result<(), Box<dyn Error>> {
     let reader = BufReader::new(f);
 
     let client = reqwest::Client::new();
 
+    let stop = Arc::new(std::sync::Mutex::new(false));
+    let stop_c = stop.clone();
+    ctrlc::set_handler(move || {
+        let mut s = stop_c.lock().unwrap();
+        *s = true;
+    })
+    .expect("Error setting Ctrl-C handler");
+
     let mut avg_src = 0f64;
     let mut ln = 0;
     for liner in reader.lines() {
+        let shouldstop = stop.lock().unwrap();
+        if *shouldstop {
+            break;
+        }
+
         ln += 1;
 
         let line = liner?;
